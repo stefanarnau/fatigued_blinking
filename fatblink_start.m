@@ -15,7 +15,7 @@ subject_list =    {'Vp01', 'Vp02', 'Vp03',...
                    'Vp14', 'Vp40', 'Vp41',...
                    'Vp43', 'Vp45'};
 % Exclude subjects
-subject_list = setdiff(subject_list, {'Vp12', 'Vp43'});
+subject_list = setdiff(subject_list, {'Vp12', 'Vp43', 'Vp41'});
 
 % Init eeglab
 addpath(PATH_EEGLAB);
@@ -131,15 +131,14 @@ for s = 1 : length(subject_list)
 
     % Loop events to select blinks
     blink_count = 0;
-    stim_count = 0;
     EEG.trialinfo = [];
     for e = 1 : length(EEG.event)
 
         % If stim event
         if strcmpi(EEG.event(e).type(1), 'S') & ismember(str2num(EEG.event(e).type(2 : end)), [1 : 108])
 
-            % Count stimuli
-            stim_count = stim_count + 1;
+            % Reset post-stim blink counter
+            post_stim_blink_nr = 0;
 
             % Get event number
             enum = str2num(EEG.event(e).type(2 : end));
@@ -184,8 +183,11 @@ for s = 1 : length(subject_list)
             blink_count = blink_count + 1;
             EEG.event(e).type = 'selected';
 
+            % Increase post-stim blink counter
+            post_stim_blink_nr = post_stim_blink_nr + 1;
+
             % Collect time on task predictors for blink events
-            EEG.trialinfo(blink_count, :) = [id, blink_count, block, subblock, lat_all, lat_block, lat_subblock, lat_event];
+            EEG.trialinfo(blink_count, :) = [id, blink_count, block, subblock, lat_all, lat_block, lat_subblock, lat_event, post_stim_blink_nr];
 
         end
 
@@ -197,7 +199,7 @@ for s = 1 : length(subject_list)
     EEG.trialinfo = EEG.trialinfo(epoch_idx, :);
 
     % Exclude blinks that are too close to stimulus (response locked...)
-    to_keep = find(EEG.trialinfo(:, 8) >= 250 & EEG.trialinfo(:, 8) <= 500);
+    to_keep = find(EEG.trialinfo(:, 8) >= 150 & EEG.trialinfo(:, 8) <= 500 & EEG.trialinfo(:, 9) > 1);
     EEG = pop_select(EEG, 'trial', to_keep);
     EEG.trialinfo = EEG.trialinfo(to_keep, :);
 
@@ -208,15 +210,17 @@ for s = 1 : length(subject_list)
     remaining_blinks(s) = length(to_keep);
 
     % Calculate erps
-    erps(s, :, :) = squeeze(mean(EEG.data, 3));
+    for sbl = 1 : 9
+        idx_sbl = EEG.trialinfo(:, 4) == sbl;
+        erps(s, sbl, :, :) = squeeze(mean(EEG.data(:, :, idx_sbl), 3));
+    end
 
     % Regression design matrix
-    desmat = [ones(size(EEG.trialinfo, 1), 1), EEG.trialinfo(:, 5), EEG.trialinfo(:, 6), EEG.trialinfo(:, 7)];
+    desmat = [ones(size(EEG.trialinfo, 1), 1), EEG.trialinfo(:, 5), EEG.trialinfo(:, 6)];
 
     % Scale predictors
     desmat(:, 2) = desmat(:, 2) / max(abs(desmat(:, 2)));
     desmat(:, 3) = desmat(:, 3) / max(abs(desmat(:, 3)));
-    desmat(:, 4) = desmat(:, 4) / max(abs(desmat(:, 4)));
 
     % regression
     for ch = 1 : EEG.nbchan
@@ -228,12 +232,38 @@ for s = 1 : length(subject_list)
         tmp = (desmat' * desmat) \ desmat' * d;
         coefs_1(s, ch, :) = squeeze(tmp(2, :));
         coefs_2(s, ch, :) = squeeze(tmp(3, :));
-        coefs_3(s, ch, :) = squeeze(tmp(4, :));
-
 
     end % End chanit
 
 end % End subjecct loop
+
+figure()
+idx_chan = 14;
+for s = 1 : length(subject_list)
+
+    subplot(4, 4, s)
+    for sbl = 1 : 9
+        pd = squeeze(erps(s, sbl, idx_chan, :));
+        plot(EEG.times, pd);
+        if sbl ~= 9
+            hold on
+        end
+        legend({'1','2','3','4','5','6','7','8','9'})
+    end
+end
+
+
+% Plot erps at Pz
+figure();
+subplot(2,1,1)
+pd = squeeze(erps(:, 12, :))';
+plot(EEG.times, pd);
+legend(subject_list)
+subplot(2,1,2)
+plot(blink_distribution_x, blink_distributions);
+
+aa =bb
+
 
 % Restructure coordinates
 chanlocs = EEG.chanlocs;
@@ -265,7 +295,7 @@ ga_template.dimord = 'chan_time';
 ga_template.label = chanlabs;
 ga_template.time = EEG.times;
 
-% GA struct true
+% GA struct coefs
 GA = {};
 for s = 1 : length(subject_list)
     ga_template.avg = squeeze(coefs_1(s, :, :));
@@ -278,49 +308,14 @@ for s = 1 : length(subject_list)
     GA{s} = ga_template;
 end 
 GA_2 = ft_timelockgrandaverage(cfg, GA{1, :});
-GA = {};
-for s = 1 : length(subject_list)
-    ga_template.avg = squeeze(coefs_3(s, :, :));
-    GA{s} = ga_template;
-end 
-GA_3 = ft_timelockgrandaverage(cfg, GA{1, :});
 
-% GA struct fake
+% GA struct null
 GA = {};
 for s = 1 : length(subject_list)
     ga_template.avg = zeros(size(squeeze(coefs_1(s, :, :))));
     GA{s} = ga_template;
 end 
-GA_fake = ft_timelockgrandaverage(cfg, GA{1, :});
-
-% Plot coefs
-figure()
-
-subplot(1, 3, 1)
-pd = squeeze(mean(coefs_1, 1));
-contourf(EEG.times,[1 : 60], pd, 50, 'linecolor','none')
-%hold on
-%contour(EEG.times,[1 : 60], stat.mask, 1, 'linecolor', 'k', 'LineWidth', 2)
-colormap('jet')
-clim([-2, 2])
-
-subplot(1, 3, 2)
-pd = squeeze(mean(coefs_2, 1));
-contourf(EEG.times,[1 : 60], pd, 50, 'linecolor','none')
-%hold on
-%contour(EEG.times,[1 : 60], stat.mask, 1, 'linecolor', 'k', 'LineWidth', 2)
-colormap('jet')
-clim([-2, 2])
-
-subplot(1, 3, 3)
-pd = squeeze(mean(coefs_3, 1));
-contourf(EEG.times,[1 : 60], pd, 50, 'linecolor','none')
-%hold on
-%contour(EEG.times,[1 : 60], stat.mask, 1, 'linecolor', 'k', 'LineWidth', 2)
-colormap('jet')
-clim([-2, 2])
-
-aa = bb
+GA_null = ft_timelockgrandaverage(cfg, GA{1, :});
 
 % Testparams
 testalpha  = 0.05;
@@ -352,15 +347,45 @@ design(2, :) = [1 : n_subjects, 1 : n_subjects];
 cfg.design = design;
 
 % The tests
-[stat]  = ft_timelockstatistics(cfg, GA_1, GA_fake);
+[stat_all]  = ft_timelockstatistics(cfg, GA_1, GA_null);
+[stat_blk]  = ft_timelockstatistics(cfg, GA_2, GA_null);
+
+% Plot coefs
+figure()
+
+subplot(2, 2, 1)
+pd = squeeze(mean(coefs_1, 1));
+contourf(EEG.times,[1 : 60], pd, 50, 'linecolor','none')
+hold on
+contour(EEG.times,[1 : 60], stat_all.mask, 1, 'linecolor', 'k', 'LineWidth', 2)
+colormap('jet')
+clim([-2, 2])
+title('whole experiment')
+
+subplot(2, 2, 2)
+pd = squeeze(mean(coefs_2, 1));
+contourf(EEG.times,[1 : 60], pd, 50, 'linecolor','none')
+hold on
+contour(EEG.times,[1 : 60], stat_blk.mask, 1, 'linecolor', 'k', 'LineWidth', 2)
+colormap('jet')
+clim([-2, 2])
+title('block')
+
+
+% Plot effect size topos at selected time points for difficulty
+clim = [-0.3, 0.3];
+tpoints = [120, 420, 1600];
+for t = 1 : length(tpoints)
+    figure('Visible', 'off'); clf;
+    tidx = erp_times >= tpoints(t) - 5 & erp_times <= tpoints(t) + 5;
+    pd = mean(apes_difficulty(:, tidx), 2);
+    topoplot(pd, chanlocs, 'plotrad', 0.7, 'intrad', 0.7, 'intsquare', 'on', 'conv', 'off', 'electrodes', 'on');
+    colormap(jet);
+    caxis(clim);
+    saveas(gcf, [PATH_VEUSZ, 'topo_difficulty_', num2str(tpoints(t)), 'ms', '.png']);
+end
 
 
 
 
-% Plot erps at Pz
-figure();
-subplot(2,1,1)
-pd = squeeze(erps(:, 44, :))';
-plot(EEG.times, pd);
-subplot(2,1,2)
-plot(blink_distribution_x, blink_distributions);
+
