@@ -15,7 +15,7 @@ subject_list =    {'Vp01', 'Vp02', 'Vp03',...
                    'Vp14', 'Vp40', 'Vp41',...
                    'Vp43', 'Vp45'};
 % Exclude subjects
-subject_list = setdiff(subject_list, {'Vp01'});
+subject_list = setdiff(subject_list, {'Vp01', 'Vp11'});
 
 % Init eeglab
 addpath(PATH_EEGLAB);
