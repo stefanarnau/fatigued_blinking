@@ -9,6 +9,7 @@ PATH_EEGLAB           = '/home/plkn/eeglab2022.1/';
 PATH_RAW_DATA         = '/mnt/data_dump/fatigued_blinking/0_raw/';
 PATH_COMBINED         = '/mnt/data_dump/fatigued_blinking/1_combined/';
 PATH_ICSET            = '/mnt/data_dump/fatigued_blinking/2_icset/';
+PATH_EYE_CATCHER      = '/mnt/data_dump/fatigued_blinking/eye-catch-master/';
 
 % The subject list
 subject_list =    {'Vp01', 'Vp02', 'Vp03',...
@@ -25,8 +26,11 @@ subject_list =    {'Vp01', 'Vp02', 'Vp03',...
 addpath(PATH_EEGLAB);
 [ALLEEG, EEG, CURRENTSET, ALLCOM] = eeglab;
 
+
+addpath(PATH_EYE_CATCHER);
+
 % SWITCH: Switch parts of script on/off
-to_execute = {'part2'};
+to_execute = {'part3'};
 
 % ========================= PART 1: Combine blocks  =========================================================================================================
 if ismember('part1', to_execute)
@@ -280,4 +284,63 @@ if ismember('part2', to_execute)
 
     end % End subject loop
 
-end% End part1
+end% End part2
+
+% ========================= PART 3: Calculate ICs =========================================================================================================
+if ismember('part3', to_execute)
+
+    % Iterating subject list
+    for s = 1 : length(subject_list)
+
+        % Current iteration subject
+        subject = subject_list{s};
+        id = str2num(subject(3 : 4));
+
+        % Load IC-data
+        EEG = pop_loadset('filename', [subject '_icset.set'], 'filepath', PATH_ICSET, 'loadmode', 'all');
+
+        % Bandpass filter data, mainly to get rid of slow drifts
+        EEG = pop_basicfilter(EEG, [1 : EEG.nbchan], 'Cutoff', [0.1, 30], 'Design', 'butter', 'Filter', 'bandpass', 'Order', 4, 'RemoveDC', 'on', 'Boundary', 'boundary');
+
+        % Get eye-IC indices
+        eye_ICs_idx = find(EEG.etc.ic_classification.ICLabel.classifications(:, 3) >= 0.8);
+
+        % Get frontal channel indices
+        frontal_channel_idx_left  = ismember({EEG.chanlocs.labels}, {'Fp1','F3','F7'});
+        frontal_channel_idx_right = ismember({EEG.chanlocs.labels}, {'Fp2','F4','F8'});
+
+        % Correlate left and right projections of eye-ICs in sensor space
+        mask_positive_correlation = [];
+        for ic = 1 : length(eye_ICs_idx)
+
+            % Get IC activation
+            ICA_ACT = pop_subcomp(EEG, eye_ICs_idx(ic), 0, 1);
+
+            % Correlate the average left and right sensor projections
+            rr = corrcoef(mean(ICA_ACT.data(frontal_channel_idx_left, :))', mean(ICA_ACT.data(frontal_channel_idx_right, :))');
+
+            % Set mask to separate blink-ICs from saccade ICs
+            if rr > 0
+                mask_positive_correlation(ic) = 1;
+            else
+                mask_positive_correlation(ic) = 0;
+            end
+
+        end
+
+        % Extract blink activation in sensor space
+        EEG = pop_subcomp(EEG, eye_ICs_idx(find(mask_positive_correlation)), 0, 1);
+
+        
+        [OUTEEG, com, blinks, blinkFits, blinkProperties, blinkStatistics, params] = pop_blinker(EEG);
+
+
+        aa=bb
+
+        % Get blink events
+        [EEG1, IC_num] = blinkDetecter(EEG, blink_ic_index)
+
+
+    end % End subject loop
+
+end% End part3
