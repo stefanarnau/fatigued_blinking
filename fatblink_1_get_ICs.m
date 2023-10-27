@@ -32,6 +32,70 @@ addpath(PATH_EYE_CATCHER);
 % SWITCH: Switch parts of script on/off
 to_execute = {'part3'};
 
+% The new order
+new_order_labels = {...
+'Fp1',...
+'Fp2',...
+'AFz',...
+'F7',...
+'F3',...
+'Fz',...
+'F4',...
+'F8',...
+'FT9',...
+'FT7',...
+'FC5',...
+'FC3',...
+'FC1',...
+'FCz',...
+'FC2',...
+'FC4',...
+'FC6',...
+'FT8',...
+'FT10',...
+'T7',...
+'C5',...
+'C3',...
+'C1',...
+'Cz',...
+'C2',...
+'C4',...
+'C6',...
+'T8',...
+'TP9',...
+'TP7',...
+'CP5',...
+'CP3',...
+'CP1',...
+'CPz',...
+'CP2',...
+'CP4',...
+'CP6',...
+'TP8',...
+'TP10',...
+'P7',...
+'P5',...
+'P3',...
+'P1',...
+'Pz',...
+'P2',...
+'P4',...
+'P6',...
+'P8',...
+'PO9',...
+'PO7',...
+'PO5',...
+'PO1',...
+'POz',...
+'PO2',...
+'PO6',...
+'PO8',...
+'PO10',...
+'O1',...
+'Oz',...
+'O2',...
+};
+
 % ========================= PART 1: Combine blocks  =========================================================================================================
 if ismember('part1', to_execute)
 
@@ -66,7 +130,7 @@ if ismember('part1', to_execute)
     end
 end
 
-% ========================= PART 2: Calculate ICs =========================================================================================================
+% ========================= PART 2: Calculate blink ICs =========================================================================================================
 if ismember('part2', to_execute)
 
     % Iterating subject list
@@ -286,7 +350,7 @@ if ismember('part2', to_execute)
 
 end% End part2
 
-% ========================= PART 3: Calculate ICs =========================================================================================================
+% ========================= PART 3: Create blink events =========================================================================================================
 if ismember('part3', to_execute)
 
     % Iterating subject list
@@ -328,17 +392,142 @@ if ismember('part3', to_execute)
 
         end
 
-        % Extract blink activation in sensor space
+        % Project blink activation to sensor space
         EEG = pop_subcomp(EEG, eye_ICs_idx(find(mask_positive_correlation)), 0, 1);
 
-        
-        [OUTEEG, com, blinks, blinkFits, blinkProperties, blinkStatistics, params] = pop_blinker(EEG);
+        % Run blinker
+        params = [];
+        params.verbose = false;
+        params.showMaxDistribution = false;
+        [~, ~, blinks] = pop_blinker(EEG, params);
+
+        % Get blink latencies at afz
+        idx_afz = ismember({blinks.signalData.signalLabel}, {'afz'});
+        blink_latencies = blinks.signalData(idx_afz).blinkPositions';
+
+        % Create blink events at maximum
+        for e = 1 : size(blink_latencies, 1)
+
+            % Get blink peak latency at afz
+            tmp = blinks.signalData(idx_afz).signal;
+            tmp = tmp(blink_latencies(e, 1) : blink_latencies(e, 2));
+            [~, idx_max]= max(tmp);
+            idx_max = blink_latencies(e, 1) + idx_max;
+
+            % Create event
+            event_idx = length(EEG.event) + 1;
+            EEG.event(event_idx).latency = idx_max;
+            EEG.event(event_idx).type = 'blink';
+            EEG.event(event_idx).code = 'blink';
+
+        end
+
+        % Fix latencies
+        EEG = eeg_checkset(EEG, 'eventconsistency');
+
+        % Save events
+        blink_events = EEG.event;
+
+        % Re-load continuous data
+        EEG = pop_loadset('filename', [subject '_icset.set'], 'filepath', PATH_ICSET, 'loadmode', 'all');
+
+        % Replace events
+        EEG.event = blink_events;
+
+        % Get original chanloc labels
+        chanlocs_labels = {};
+        for ch = 1 : length(EEG.chanlocs)
+            chanlocs_labels{end + 1} = EEG.chanlocs(ch).labels;
+        end
+
+        % Get new order indices
+        new_order_idx = [];
+        for ch = 1 : length(EEG.chanlocs)
+            new_order_idx(end + 1) = find(strcmpi(new_order_labels{ch}, chanlocs_labels));
+        end
+
+        % Re-order chanlocs
+        EEG.chanlocs = EEG.chanlocs(new_order_idx);
+
+        % Re-order data
+        EEG.data = EEG.data(new_order_idx, :, :);
+
+        % Loop events
+        block = 0;
+        subblock = 0;
+
+        % Loop events to select blinks
+        blink_count = 0;
+        EEG.trialinfo = [];
+        for e = 1 : length(EEG.event)
+
+            % If stim event
+            if strcmpi(EEG.event(e).type(1), 'S') & ismember(str2num(EEG.event(e).type(2 : end)), [1 : 108])
+
+                % Reset post-stim blink counter
+                post_stim_blink_nr = 0;
+
+                % Get event number
+                enum = str2num(EEG.event(e).type(2 : end));
+
+                % If block changes
+                if ceil(enum / 36) > block
+                    
+                    % change block
+                    block = ceil(enum / 36);
+
+                    % Set block offset latency
+                    block_lat_offset = EEG.event(e).latency;
+
+                end
+
+                % If subblock changes
+                if ceil(enum / 12) > subblock
+
+                    % change subblock
+                    subblock = ceil(enum / 12);
+
+                    % Set subblock offset latency
+                    subblock_lat_offset = EEG.event(e).latency;
+
+                end
+
+                % Set event offset latency
+                event_lat_offset = EEG.event(e).latency;
+
+            end % End stim-event check
+
+            % If it is a blink in a subblock
+            if strcmpi(EEG.event(e).type, 'blink') & subblock > 0
+
+                % Set latencies
+                lat_all = EEG.event(e).latency;
+                lat_block = EEG.event(e).latency - block_lat_offset;
+                lat_subblock = EEG.event(e).latency - subblock_lat_offset;
+                lat_event = EEG.event(e).latency - event_lat_offset;
+
+                % Select blink
+                blink_count = blink_count + 1;
+                EEG.event(e).type = 'selected';
+
+                % Increase post-stim blink counter
+                post_stim_blink_nr = post_stim_blink_nr + 1;
+
+                % Collect time on task predictors for blink events
+                EEG.trialinfo(blink_count, :) = [id, blink_count, block, subblock, lat_all, lat_block, lat_subblock, lat_event, post_stim_blink_nr];
+
+            end
+
+        end % End event loop
+
+        % Epoch data
+        [EEG, epoch_idx] = pop_epoch(EEG, {'selected'}, [-0.5, 1.2], 'newname', 'blink', 'epochinfo', 'yes');
+        EEG = pop_rmbase(EEG, [-300, -100]);
+        EEG.trialinfo = EEG.trialinfo(epoch_idx, :);
+
+        aa = bb;
 
 
-        aa=bb
-
-        % Get blink events
-        [EEG1, IC_num] = blinkDetecter(EEG, blink_ic_index)
 
 
     end % End subject loop
