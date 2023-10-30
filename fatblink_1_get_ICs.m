@@ -9,7 +9,7 @@ PATH_EEGLAB           = '/home/plkn/eeglab2022.1/';
 PATH_RAW_DATA         = '/mnt/data_dump/fatigued_blinking/0_raw/';
 PATH_COMBINED         = '/mnt/data_dump/fatigued_blinking/1_combined/';
 PATH_ICSET            = '/mnt/data_dump/fatigued_blinking/2_icset/';
-PATH_EYE_CATCHER      = '/mnt/data_dump/fatigued_blinking/eye-catch-master/';
+PATH_CLEANED          = '/mnt/data_dump/fatigued_blinking/3_cleaned/';
 
 % The subject list
 subject_list =    {'Vp01', 'Vp02', 'Vp03',...
@@ -25,9 +25,6 @@ subject_list =    {'Vp01', 'Vp02', 'Vp03',...
 % Init EEGlab
 addpath(PATH_EEGLAB);
 [ALLEEG, EEG, CURRENTSET, ALLCOM] = eeglab;
-
-
-addpath(PATH_EYE_CATCHER);
 
 % SWITCH: Switch parts of script on/off
 to_execute = {'part3'};
@@ -331,7 +328,7 @@ if ismember('part2', to_execute)
         [EEG, rejsegs] = pop_autorej(EEG, 'nogui', 'on', 'threshold', 1000, 'startprob', 5, 'maxrej', 5, 'eegplot', 'off');
         EEG.segs_rejected_before_ica = length(rejsegs);
 
-        % Run ICA on randsample of 666 trials
+        % Run ICA on randsample
         idx = randsample([1 : size(EEG.data, 3)], 600);
         EEG = pop_selectevent(EEG, 'epoch', idx, 'deleteevents', 'off', 'deleteepochs', 'on', 'invertepochs', 'off');
 
@@ -367,7 +364,7 @@ if ismember('part3', to_execute)
         EEG = pop_basicfilter(EEG, [1 : EEG.nbchan], 'Cutoff', [0.1, 30], 'Design', 'butter', 'Filter', 'bandpass', 'Order', 4, 'RemoveDC', 'on', 'Boundary', 'boundary');
 
         % Get eye-IC indices
-        eye_ICs_idx = find(EEG.etc.ic_classification.ICLabel.classifications(:, 3) >= 0.8);
+        eye_ICs_idx = find(EEG.etc.ic_classification.ICLabel.classifications(:, 3) >= 0.7);
 
         % Get frontal channel indices
         frontal_channel_idx_left  = ismember({EEG.chanlocs.labels}, {'Fp1','F3','F7'});
@@ -417,8 +414,8 @@ if ismember('part3', to_execute)
             % Create event
             event_idx = length(EEG.event) + 1;
             EEG.event(event_idx).latency = idx_max;
-            EEG.event(event_idx).type = 'blink';
-            EEG.event(event_idx).code = 'blink';
+            EEG.event(event_idx).type = 'blink_all';
+            EEG.event(event_idx).code = 'blink_all';
 
         end
 
@@ -462,19 +459,19 @@ if ismember('part3', to_execute)
         for e = 1 : length(EEG.event)
 
             % If stim event
-            if strcmpi(EEG.event(e).type(1), 'S') & ismember(str2num(EEG.event(e).type(2 : end)), [1 : 108])
+            if strcmpi(EEG.event(e).type, 'stim')
 
                 % Reset post-stim blink counter
                 post_stim_blink_nr = 0;
 
-                % Get event number
-                enum = str2num(EEG.event(e).type(2 : end));
+                % Set event offset latency
+                event_lat_offset = EEG.event(e).latency;
 
                 % If block changes
-                if ceil(enum / 36) > block
-                    
-                    % change block
-                    block = ceil(enum / 36);
+                if EEG.event(e).bl ~= block;
+
+                    % Chnage block
+                    block = EEG.event(e).bl;
 
                     % Set block offset latency
                     block_lat_offset = EEG.event(e).latency;
@@ -482,23 +479,19 @@ if ismember('part3', to_execute)
                 end
 
                 % If subblock changes
-                if ceil(enum / 12) > subblock
-
+                if EEG.event(e).sbl_total ~= subblock;
                     % change subblock
-                    subblock = ceil(enum / 12);
+                    subblock = EEG.event(e).sbl_total;
 
                     % Set subblock offset latency
                     subblock_lat_offset = EEG.event(e).latency;
 
                 end
 
-                % Set event offset latency
-                event_lat_offset = EEG.event(e).latency;
-
             end % End stim-event check
 
             % If it is a blink in a subblock
-            if strcmpi(EEG.event(e).type, 'blink') & subblock > 0
+            if strcmpi(EEG.event(e).type, 'blink_all') & subblock > 0
 
                 % Set latencies
                 lat_all = EEG.event(e).latency;
@@ -508,27 +501,104 @@ if ismember('part3', to_execute)
 
                 % Select blink
                 blink_count = blink_count + 1;
-                EEG.event(e).type = 'selected';
+                EEG.event(e).type = 'blink';
 
                 % Increase post-stim blink counter
                 post_stim_blink_nr = post_stim_blink_nr + 1;
 
+                % Get subblock as 1 2 3
+                sbl = mod(subblock, 3);
+                if sbl == 0
+                    sbl = 3;
+                end
+
                 % Collect time on task predictors for blink events
-                EEG.trialinfo(blink_count, :) = [id, blink_count, block, subblock, lat_all, lat_block, lat_subblock, lat_event, post_stim_blink_nr];
+                EEG.trialinfo(blink_count, :) = [id, blink_count, block, sbl, subblock, lat_all, lat_block, lat_subblock, lat_event, post_stim_blink_nr];
 
             end
 
         end % End event loop
 
+        % Save a backup before filtering
+        BACKUP = EEG;
+
+        % Bandpass filter data (ERPlab toolbox function) 
+        EEG = pop_basicfilter(EEG, [1 : EEG.nbchan], 'Cutoff', [2, 20], 'Design', 'butter', 'Filter', 'bandpass', 'Order', 4, 'RemoveDC', 'on', 'Boundary', 'boundary');
+
+        % Bad channel detection
+        [EEG, i1] = pop_rejchan(EEG, 'elec', [1 : EEG.nbchan], 'threshold', 10, 'norm', 'on', 'measure', 'kurt');
+        [EEG, i2] = pop_rejchan(EEG, 'elec', [1 : EEG.nbchan], 'threshold', 5, 'norm', 'on', 'measure', 'prob');
+        EEG.chans_rejected = horzcat(i1, i2);
+        EEG.n_chans_rejected = length(horzcat(i1, i2));
+
+        % Interpolate channels
+        EEG = pop_interp(EEG, EEG.chanlocs_original, 'spherical');
+
+        % Reref common average
+        EEG = pop_reref(EEG, []);
+
+        % Determine rank of data
+        dataRank = sum(eig(cov(double(EEG.data'))) > 1e-6);
+
+        % Epoch data 150 ms stim + jittered 2800ms ISI
+        EEG = pop_epoch(EEG, {'blink'}, [-0.5, 1.2], 'newname', [num2str(id) '_seg'], 'epochinfo', 'yes');
+        
+        % Autoreject data before ICA
+        [EEG, rejsegs] = pop_autorej(EEG, 'nogui', 'on', 'threshold', 1000, 'startprob', 5, 'maxrej', 5, 'eegplot', 'off');
+
+        % Run ICA on randsample
+        idx = randsample([1 : size(EEG.data, 3)], 1500);
+        EEG = pop_selectevent(EEG, 'epoch', idx, 'deleteevents', 'off', 'deleteepochs', 'on', 'invertepochs', 'off');
+
+        % Runica & ICLabel
+        EEG = pop_runica(EEG, 'extended', 1, 'interrupt', 'on', 'PCA', dataRank);
+        EEG = iclabel(EEG);
+
+        % Copy ICs to backup set
+        BACKUP = pop_editset(BACKUP, 'icachansind', 'EEG.icachansind', 'icaweights', 'EEG.icaweights', 'icasphere', 'EEG.icasphere');
+        BACKUP.etc = EEG.etc;
+
+        % Make backup set the working set
+        EEG = BACKUP;
+
+        % Get good-IC indices
+        good_ICs = find(EEG.etc.ic_classification.ICLabel.classifications(:, 1) >= 0.3 &...
+                        EEG.etc.ic_classification.ICLabel.classifications(:, 2) <= 0.3 &...
+                        EEG.etc.ic_classification.ICLabel.classifications(:, 3) <= 0.3 &...
+                        EEG.etc.ic_classification.ICLabel.classifications(:, 4) <= 0.3);
+
+        % Remove bad ICs
+        EEG = pop_subcomp(EEG, good_ICs, 0, 1);
+
+        % Bandpass filter data
+        EEG = pop_basicfilter(EEG, [1 : EEG.nbchan], 'Cutoff', [0.1, 30], 'Design', 'butter', 'Filter', 'bandpass', 'Order', 4, 'RemoveDC', 'on', 'Boundary', 'boundary');
+
+        % Bad channel detection
+        [EEG, i1] = pop_rejchan(EEG, 'elec', [1 : EEG.nbchan], 'threshold', 10, 'norm', 'on', 'measure', 'kurt');
+        [EEG, i2] = pop_rejchan(EEG, 'elec', [1 : EEG.nbchan], 'threshold', 5, 'norm', 'on', 'measure', 'prob');
+        EEG.chans_rejected = horzcat(i1, i2);
+        EEG.n_chans_rejected = length(horzcat(i1, i2));
+
+        % Interpolate channels
+        EEG = pop_interp(EEG, EEG.chanlocs_original, 'spherical');
+
+        % Reref common average
+        EEG = pop_reref(EEG, []);
+
+        % Determine rank of data
+        dataRank = sum(eig(cov(double(EEG.data'))) > 1e-6);
+
         % Epoch data
-        [EEG, epoch_idx] = pop_epoch(EEG, {'selected'}, [-0.5, 1.2], 'newname', 'blink', 'epochinfo', 'yes');
+        [EEG, epoch_idx] = pop_epoch(EEG, {'blink'}, [-0.5, 1.2], 'newname', 'blink', 'epochinfo', 'yes');
         EEG = pop_rmbase(EEG, [-300, -100]);
         EEG.trialinfo = EEG.trialinfo(epoch_idx, :);
+        
+        % Autoreject data before ICA
+        [EEG, rejsegs] = pop_autorej(EEG, 'nogui', 'on', 'threshold', 1000, 'startprob', 5, 'maxrej', 5, 'eegplot', 'off');
+        EEG.trialinfo(rejsegs, :) = [];
 
-        aa = bb;
-
-
-
+        % Save cleaned data
+        EEG = pop_saveset(EEG, 'filename', [subject '_cleaned.set'], 'filepath', PATH_CLEANED, 'check', 'on');
 
     end % End subject loop
 
