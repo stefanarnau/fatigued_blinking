@@ -20,14 +20,15 @@ subject_list =    {'Vp01', 'Vp02', 'Vp03',...
                    'Vp40', 'Vp41', 'Vp42',...
                    'Vp43', 'Vp44', 'Vp45'};
 
-%subject_list =    {'Vp01'};
+% Exclude 
+subject_list = setdiff(subject_list, {'Vp15'}); % VP15 tons of boundary events. Extremely noisy data
 
 % Init EEGlab
 addpath(PATH_EEGLAB);
 [ALLEEG, EEG, CURRENTSET, ALLCOM] = eeglab;
 
 % SWITCH: Switch parts of script on/off
-to_execute = {'part3'};
+to_execute = {'part4'};
 
 % The new order
 new_order_labels = {...
@@ -603,3 +604,84 @@ if ismember('part3', to_execute)
     end % End subject loop
 
 end% End part3
+
+% ========================= PART 4: Count and plot =========================================================================================================
+if ismember('part4', to_execute)
+
+    % Count the blinks
+    trialcounts = [];
+    counter = 0;
+
+    % Iterating subject list
+    for s = 1 : length(subject_list)
+
+        % Current iteration subject
+        subject = subject_list{s};
+        id = str2num(subject(3 : 4));
+
+        % Load info
+        EEG = pop_loadset('filename', [subject '_cleaned.set'], 'filepath', PATH_CLEANED, 'loadmode', 'info');
+
+        % Trialinfo columns:
+        % 1.  id
+        % 2.  blink_count
+        % 3.  block (1-3)
+        % 4.  subblock (1-3)
+        % 5.  subblock total (1-9)
+        % 6.  latency experiment
+        % 7.  latency block
+        % 8.  latency subblock
+        % 9.  latrncy event
+        % 10. post stimulus blink number
+
+        % loop subblocks
+        for sbl = 1 : 9
+
+            n1 = sum(EEG.trialinfo(:, 9) <= 512 & EEG.trialinfo(:, 5) == sbl & EEG.trialinfo(:, 10) == 1);
+            n2 = sum(EEG.trialinfo(:, 9) <= 512 & EEG.trialinfo(:, 5) == sbl & EEG.trialinfo(:, 10) > 1);
+
+            counter = counter + 1;
+            trialcounts(counter, :) = [id, sbl, n1, n2];
+
+        end
+
+
+    end % End subject loop
+
+
+    % Iterating subject list
+    figure()
+    for s = 1 : length(subject_list)
+
+        % Current iteration subject
+        subject = subject_list{s};
+        id = str2num(subject(3 : 4));
+
+        % Load info
+        EEG = pop_loadset('filename', [subject '_cleaned.set'], 'filepath', PATH_CLEANED, 'loadmode', 'all');
+
+        % loop subblocks
+        erps1 = [];
+        erps2 = [];
+        for sbl = 1 : 9
+
+            % Select electrode
+            channel_idx = 14;
+
+            % Get trial idx
+            idx1 = EEG.trialinfo(:, 9) <= 512 & EEG.trialinfo(:, 5) == sbl & EEG.trialinfo(:, 10) == 1;
+            idx2 = EEG.trialinfo(:, 9) <= 512 & EEG.trialinfo(:, 5) == sbl & EEG.trialinfo(:, 10) > 1;
+
+            % Calculate erps
+            erps1(sbl, :) = mean(squeeze(EEG.data(44, :, idx1)), 2);
+            erps2(sbl, :) = mean(squeeze(EEG.data(44, :, idx2)), 2);
+
+        end
+
+        subplot(5, 4, s);
+        plot(EEG.times, erps1);
+        colormap(winter)
+        title(id);
+
+    end % End subject loop
+end% End part4
